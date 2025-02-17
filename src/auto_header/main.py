@@ -52,16 +52,16 @@ class AutoHeader:
 
         if end:  # Multi-line comment style (like /* */)
             if len(header_lines) == 1:
-                return f"{start} {header_lines[0]} {end}\n\n"
+                return f"{start} {header_lines[0]} {end}"
             else:
                 # Format each line within the comment markers
                 formatted_lines = [f"{start}"]
                 formatted_lines.extend(f" * {line}" for line in header_lines)
                 formatted_lines.append(f" {end}")
-                return "\n".join(formatted_lines) + "\n\n"
+                return "\n".join(formatted_lines)
         else:  # Single-line comment style (like #)
             formatted_lines = [f"{start} {line}" for line in header_lines]
-            return "\n".join(formatted_lines) + "\n\n"
+            return "\n".join(formatted_lines)
 
     def is_copyright_header(self, text: str) -> bool:
         """
@@ -214,13 +214,22 @@ class AutoHeader:
             if existing_copyright and existing_copyright.strip() == new_header.strip():
                 return False
 
-            # Combine all parts
-            updated_content = ""
-            if special_header:
-                updated_content += special_header
-            updated_content += new_header
-            if remaining_content:
-                updated_content += remaining_content
+            # Normalize and combine all parts
+            parts = []
+
+            # Add special header if present (e.g., shebang)
+            if special_header.strip():
+                parts.append(special_header.strip())
+
+            # Add the new copyright header
+            parts.append(new_header.strip())
+
+            # Add remaining content if present
+            if remaining_content.strip():
+                parts.append(remaining_content.strip())
+
+            # Join with exactly one blank line between parts
+            updated_content = "\n\n".join(parts) + "\n"
 
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(updated_content)
