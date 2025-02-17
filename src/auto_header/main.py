@@ -63,6 +63,56 @@ class AutoHeader:
             formatted_lines = [f"{start} {line}" for line in header_lines]
             return "\n".join(formatted_lines)
 
+    def normalize_comment(
+        self, text: str, comment_syntax: Optional[Dict[str, str]] = None
+    ) -> str:
+        """
+        Normalize comment text by removing comment markers and excess whitespace.
+        Handles both single and multiline comments correctly.
+        """
+        if not text:
+            return ""
+
+        lines = text.splitlines()
+        if not lines:
+            return ""
+
+        # If we know the comment syntax, use it for precise marker removal
+        if comment_syntax:
+            start, end = comment_syntax["start"], comment_syntax["end"]
+
+            # Handle multiline comment blocks
+            if start == "/*" and end == "*/":
+                # Remove start marker from first line
+                if lines[0].strip().startswith("/*"):
+                    lines[0] = lines[0].replace("/*", "", 1).strip()
+                # Remove end marker from last line
+                if lines[-1].strip().endswith("*/"):
+                    lines[-1] = lines[-1].rsplit("*/", 1)[0].strip()
+                # Remove any leading asterisks from middle lines
+                lines = [line.strip().lstrip("*").strip() for line in lines]
+            else:
+                # For single line comments or other multiline formats
+                for i, line in enumerate(lines):
+                    if line.strip().startswith(start):
+                        lines[i] = line.replace(start, "", 1).strip()
+                    if end and line.strip().endswith(end):
+                        lines[i] = line.rsplit(end, 1)[0].strip()
+
+        # For unknown comment syntax, try to detect and remove common markers
+        else:
+            cleaned_lines = []
+            for line in lines:
+                line = line.strip()
+                # Remove common comment markers
+                for marker in ["#", "//", "/*", "*/", "<!--", "-->", "*"]:
+                    line = line.replace(marker, "").strip()
+                if line:  # Only keep non-empty lines
+                    cleaned_lines.append(line)
+            lines = cleaned_lines
+
+        return " ".join(line for line in lines if line)
+
     def is_copyright_header(self, text: str) -> bool:
         """
         Check if a text block is a copyright header.
@@ -138,28 +188,48 @@ class AutoHeader:
 
             # Check for comment blocks
             if not found_copyright:
-                comment_start = False
+                # Handle multiline comments
                 if stripped.startswith("/*"):
                     in_comment_block = True
-                    comment_start = True
-                elif stripped.endswith("*/"):
-                    in_comment_block = False
-                elif stripped.startswith("<!--"):
-                    in_comment_block = True
-                    comment_start = True
-                elif stripped.endswith("-->"):
-                    in_comment_block = False
-                elif stripped.startswith("#") or stripped.startswith("<#"):
-                    comment_block_lines.append(line)
-                    i += 1
-                    continue
-
-                if comment_start:
                     comment_block_lines = [line]
                     i += 1
+                    while i < len(lines) and in_comment_block:
+                        line = lines[i]
+                        comment_block_lines.append(line)
+                        if "*/" in line:
+                            in_comment_block = False
+                        i += 1
+                    # Process the complete comment block
+                    comment_text = "\n".join(comment_block_lines)
+                    if self.is_copyright_header(comment_text, comment_syntax):
+                        copyright_header_lines.extend(comment_block_lines)
+                        found_copyright = True
+                    else:
+                        content_lines.extend(comment_block_lines)
                     continue
 
-                if in_comment_block:
+                # Handle HTML-style comments
+                elif stripped.startswith("<!--"):
+                    in_comment_block = True
+                    comment_block_lines = [line]
+                    i += 1
+                    while i < len(lines) and in_comment_block:
+                        line = lines[i]
+                        comment_block_lines.append(line)
+                        if "-->" in line:
+                            in_comment_block = False
+                        i += 1
+                    # Process the complete comment block
+                    comment_text = "\n".join(comment_block_lines)
+                    if self.is_copyright_header(comment_text):
+                        copyright_header_lines.extend(comment_block_lines)
+                        found_copyright = True
+                    else:
+                        content_lines.extend(comment_block_lines)
+                    continue
+
+                # Handle single-line comments
+                elif stripped.startswith("#") or stripped.startswith("<#"):
                     comment_block_lines.append(line)
                     i += 1
                     continue
