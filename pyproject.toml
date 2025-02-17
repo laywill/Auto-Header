@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-header"
@@ -12,17 +12,24 @@ license = "MIT"
 authors = [
     { name = "Your Name", email = "your.email@example.com" }
 ]
-dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["auto_header"]
+
+[project.dependencies]
+typing-extensions = ">=4.0.0"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-cov>=4.1.0",
     "pre-commit>=3.0"
 ]
+
+[project.scripts]
+auto-header = "auto_header.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-
-[project.scripts]
-auto-header = "auto_header.main:main"

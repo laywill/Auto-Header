@@ -43,9 +43,6 @@
                     "editor.rulers": [
                         100
                     ]
-                },
-                "[yaml]": {
-                    "editor.defaultFormatter": "redhat.yaml"
                 }
             }
         }
