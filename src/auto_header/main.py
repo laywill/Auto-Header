@@ -113,30 +113,6 @@ class AutoHeader:
 
         return " ".join(line for line in lines if line)
 
-    def is_copyright_header(self, text: str) -> bool:
-        """
-        Check if a text block is a copyright header.
-
-        Criteria:
-        1. Contains 'copyright' (case insensitive)
-        2. Contains 'license' or 'licence' (case insensitive)
-        3. Matches our header except for date differences
-        """
-        # Normalize text for comparison (strip comments and whitespace)
-        normalized = re.sub(r"[#/*<!>-]+", "", text).strip()
-        target_normalized = re.sub(r"[#/*<!>-]+", "", self.header_text).strip()
-
-        # If it's nearly identical (ignoring dates), it's a header
-        if re.sub(r"\d{4}", "0000", normalized) == re.sub(
-            r"\d{4}", "0000", target_normalized
-        ):
-            return True
-
-        normalized_lower = normalized.lower()
-        return any(
-            word in normalized_lower for word in ["copyright", "license", "licence"]
-        )
-
     def extract_special_header(
         self, content: str, filepath: str
     ) -> Tuple[str, str, str]:
