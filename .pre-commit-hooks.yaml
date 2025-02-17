@@ -1,10 +1,7 @@
----
-repos:
-  - repo: local
-    hooks:
-    - id: auto-header
-      name: Auto Header
-      description: 'Automatically manages file headers in repository files'
-      entry: auto-header
-      language: python
-      types: [text]
+# Hooks defined in this repository, available for others to pull in
+- id: auto-header
+  name: Auto Header
+  description: "Automatically manages file headers in repository files"
+  entry: auto-header
+  language: python
+  types: [text]
