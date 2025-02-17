@@ -108,6 +108,35 @@ Old: 1.0.0rc0
 New: 1.0.0
 ```
 
+## Running the tool
+
+### Basic usage - process all supported files in a directory
+
+```bash
+auto-header --directory /path/to/your/files
+```
+
+### Add a custom header
+
+```bash
+auto-header --directory /path/to/your/files --header "Copyright YourCompany Ltd 2025"
+```
+
+### Ignore specific files or patterns
+
+```bash
+auto-header --directory /path/to/your/files --ignore "*.txt" "temp/*" ".git/*"
+```
+
+### Process all supported files in a directory, adding a custom header, ignoring specific files and patterns.
+
+```bash
+auto-header
+  --directory /path/to/your/files \
+  --header "Copyright Example Corp 2025" \
+  --ignore "tests/data.txt" "temp/*" ".git/*"
+```
+
 ## Using as a Pre-commit Hook
 
 Add to your project's `.pre-commit-config.yaml`:
