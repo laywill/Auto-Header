@@ -4,21 +4,52 @@ import os
 import re
 import fnmatch
 import argparse
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Set
+
+
+@dataclass
+class FileSection:
+    """Represents a section of a file with its content and metadata."""
+
+    content: str
+    is_special: bool = False
+    is_copyright: bool = False
+    is_comment_block: bool = False
+    comment_syntax: Optional[Dict[str, str]] = None
 
 
 class AutoHeader:
-    # Dictionary mapping file extensions to their comment syntax
-    COMMENT_SYNTAX = {
-        ".py": {"start": "#", "end": ""},
-        ".yaml": {"start": "#", "end": ""},
-        ".yml": {"start": "#", "end": ""},
-        ".sh": {"start": "#", "end": ""},
-        ".ps1": {"start": "<#", "end": "#>"},
-        ".tf": {"start": "/*", "end": "*/"},
-        ".tfvars": {"start": "#", "end": ""},
-        ".md": {"start": "<!--", "end": "-->"},
-        ".markdown": {"start": "<!--", "end": "-->"},
+    # Dictionary mapping file extensions to their comment syntax and special rules
+    FILE_TYPES = {
+        ".py": {
+            "comment": {"start": "#", "end": ""},
+            "special_patterns": [r"^#!.*", r"^# -*-.*"],
+        },
+        ".yaml": {
+            "comment": {"start": "#", "end": ""},
+            "special_patterns": [r"^---$"],
+            "preserve_markers": True,
+        },
+        ".yml": {
+            "comment": {"start": "#", "end": ""},
+            "special_patterns": [r"^---$"],
+            "preserve_markers": True,
+        },
+        ".sh": {"comment": {"start": "#", "end": ""}, "special_patterns": [r"^#!.*"]},
+        ".ps1": {
+            "comment": {"start": "<#", "end": "#>"},
+            "special_patterns": [
+                r"^#requires.*",
+                r"^param\s*\(.*?\)(\s*{)?$",
+                r"^\[CmdletBinding.*?\]$",
+            ],
+            "multiline_blocks": ["param"],
+        },
+        ".tf": {"comment": {"start": "/*", "end": "*/"}},
+        ".tfvars": {"comment": {"start": "#", "end": ""}},
+        ".md": {"comment": {"start": "<!--", "end": "-->"}},
+        ".markdown": {"comment": {"start": "<!--", "end": "-->"}},
     }
 
     def __init__(self, header_text: str, ignore_patterns: Optional[List[str]] = None):
@@ -31,6 +62,13 @@ class AutoHeader:
         """
         self.header_text = header_text
         self.ignore_patterns = ignore_patterns or []
+        # Compile special patterns for performance
+        self.compiled_patterns: Dict[str, List[re.Pattern]] = {}
+        for ext, config in self.FILE_TYPES.items():
+            if "special_patterns" in config:
+                self.compiled_patterns[ext] = [
+                    re.compile(pattern) for pattern in config["special_patterns"]
+                ]
 
     def should_ignore(self, filepath: str) -> bool:
         """Check if a file should be ignored based on ignore patterns."""
@@ -38,244 +76,210 @@ class AutoHeader:
             fnmatch.fnmatch(filepath, pattern) for pattern in self.ignore_patterns
         )
 
-    def get_comment_syntax(self, filepath: str) -> Optional[Dict[str, str]]:
-        """Get the appropriate comment syntax for a given file."""
+    def get_file_config(self, filepath: str) -> Optional[Dict]:
+        """Get the configuration for a given file type."""
         _, ext = os.path.splitext(filepath)
-        return self.COMMENT_SYNTAX.get(ext.lower())
+        return self.FILE_TYPES.get(ext.lower())
 
     def format_header(self, comment_syntax: Dict[str, str]) -> str:
         """Format the header text with appropriate comment markers."""
         start, end = comment_syntax["start"], comment_syntax["end"]
-
-        # Split header into lines, preserving intentional line breaks
         header_lines = self.header_text.splitlines()
 
-        if end:  # Multi-line comment style (like /* */)
+        if end:  # Multi-line comment style
             if len(header_lines) == 1:
-                return f"{start} {header_lines[0]} {end}"
+                return f"{start} {header_lines[0]} {end}\n"
             else:
-                # Format each line within the comment markers
                 formatted_lines = [f"{start}"]
                 formatted_lines.extend(f" * {line}" for line in header_lines)
                 formatted_lines.append(f" {end}")
-                return "\n".join(formatted_lines)
-        else:  # Single-line comment style (like #)
-            formatted_lines = [f"{start} {line}" for line in header_lines]
-            return "\n".join(formatted_lines)
+                return "\n".join(formatted_lines) + "\n"
+        else:  # Single-line comment style
+            return "\n".join(f"{start} {line}" for line in header_lines) + "\n"
 
-    def normalize_comment(
-        self, text: str, comment_syntax: Optional[Dict[str, str]] = None
-    ) -> str:
+    def is_special_line(self, line: str, ext: str) -> bool:
+        """Check if a line matches any special patterns for the file type."""
+        if ext not in self.compiled_patterns:
+            return False
+        return any(
+            pattern.match(line.strip()) for pattern in self.compiled_patterns[ext]
+        )
+
+    def is_copyright_text(self, text: str) -> bool:
         """
-        Normalize comment text by removing comment markers and excess whitespace.
-        Handles both single and multiline comments correctly.
+        Check if text contains copyright or license information.
+        Handles both exact matches and general copyright indicators.
         """
-        if not text:
-            return ""
+        normalized = re.sub(r"\s+", " ", text.lower())
+        # Check for exact match (ignoring dates and whitespace)
+        target = re.sub(r"\s+", " ", self.header_text.lower())
+        if re.sub(r"\d{4}", "0000", normalized) == re.sub(r"\d{4}", "0000", target):
+            return True
 
-        lines = text.splitlines()
-        if not lines:
-            return ""
+        # Check for copyright/license keywords
+        return any(word in normalized for word in ["copyright", "license", "licence"])
 
-        # If we know the comment syntax, use it for precise marker removal
-        if comment_syntax:
-            start, end = comment_syntax["start"], comment_syntax["end"]
-
-            # Handle multiline comment blocks
-            if start == "/*" and end == "*/":
-                # Remove start marker from first line
-                if lines[0].strip().startswith("/*"):
-                    lines[0] = lines[0].replace("/*", "", 1).strip()
-                # Remove end marker from last line
-                if lines[-1].strip().endswith("*/"):
-                    lines[-1] = lines[-1].rsplit("*/", 1)[0].strip()
-                # Remove any leading asterisks from middle lines
-                lines = [line.strip().lstrip("*").strip() for line in lines]
-            else:
-                # For single line comments or other multiline formats
-                for i, line in enumerate(lines):
-                    if line.strip().startswith(start):
-                        lines[i] = line.replace(start, "", 1).strip()
-                    if end and line.strip().endswith(end):
-                        lines[i] = line.rsplit(end, 1)[0].strip()
-
-        # For unknown comment syntax, try to detect and remove common markers
-        else:
-            cleaned_lines = []
-            for line in lines:
-                line = line.strip()
-                # Remove common comment markers
-                for marker in ["#", "//", "/*", "*/", "<!--", "-->", "*"]:
-                    line = line.replace(marker, "").strip()
-                if line:  # Only keep non-empty lines
-                    cleaned_lines.append(line)
-            lines = cleaned_lines
-
-        return " ".join(line for line in lines if line)
-
-    def extract_special_header(
-        self, content: str, filepath: str
-    ) -> Tuple[str, str, str]:
+    def parse_file_content(self, content: str, filepath: str) -> List[FileSection]:
         """
-        Extract special headers and existing copyright header if present.
-
-        Returns:
-            Tuple[str, str, str]: (special_header, existing_copyright, remaining_content)
+        Parse file content into sections while preserving special elements.
+        Returns list of FileSection objects in correct order.
         """
         lines = content.splitlines()
-        if not lines:
-            return "", "", ""
-
-        special_header_lines = []
-        copyright_header_lines = []
-        content_lines = []
-
-        # Track our parsing state
+        sections: List[FileSection] = []
+        current_section = []
+        in_special_block = False
         in_comment_block = False
-        found_copyright = False
-        comment_block_lines = []
 
-        _, ext = os.path.splitext(filepath)
-        ext = ext.lower()
+        file_config = self.get_file_config(filepath)
+        if not file_config:
+            return [FileSection(content)]
 
-        # Process lines
+        comment_syntax = file_config["comment"]
+        ext = os.path.splitext(filepath)[1].lower()
+
         i = 0
         while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
+            line = lines[i].rstrip()
 
-            # Handle special headers first (shebang, etc.)
-            if i == 0 and stripped.startswith("#!"):
-                special_header_lines.append(line)
+            # Handle multiline blocks (like PowerShell param blocks)
+            if file_config.get("multiline_blocks") and any(
+                line.strip().lower().startswith(block)
+                for block in file_config["multiline_blocks"]
+            ):
+                current_section.append(line)
                 i += 1
-                continue
-
-            # Handle document markers for YAML
-            if ext in [".yml", ".yaml"] and stripped == "---":
-                special_header_lines.append(line)
-                i += 1
-                continue
-
-            # Skip empty lines between special headers
-            if not stripped and not content_lines and not copyright_header_lines:
-                special_header_lines.append(line)
-                i += 1
-                continue
-
-            # Check for comment blocks
-            if not found_copyright:
-                # Handle multiline comments
-                if stripped.startswith("/*"):
-                    in_comment_block = True
-                    comment_block_lines = [line]
+                # Collect until matching closing brace
+                brace_count = line.count("{") - line.count("}")
+                while i < len(lines) and (brace_count > 0 or "}" not in lines[i]):
+                    current_section.append(lines[i])
+                    brace_count += lines[i].count("{") - lines[i].count("}")
                     i += 1
-                    while i < len(lines) and in_comment_block:
-                        line = lines[i]
-                        comment_block_lines.append(line)
-                        if "*/" in line:
-                            in_comment_block = False
+                if i < len(lines):  # Add closing line
+                    current_section.append(lines[i])
+                sections.append(
+                    FileSection("\n".join(current_section), is_special=True)
+                )
+                current_section = []
+                i += 1
+                continue
+
+            # Check for special lines (shebang, markers, etc.)
+            if self.is_special_line(line, ext):
+                if current_section:
+                    sections.append(FileSection("\n".join(current_section)))
+                    current_section = []
+                sections.append(FileSection(line, is_special=True))
+                i += 1
+                continue
+
+            # Handle comment blocks
+            if comment_syntax["end"]:  # Multiline comments
+                if line.strip().startswith(comment_syntax["start"]):
+                    if current_section:
+                        sections.append(FileSection("\n".join(current_section)))
+                        current_section = []
+                    comment_lines = [line]
+                    i += 1
+                    while i < len(lines) and comment_syntax["end"] not in lines[i]:
+                        comment_lines.append(lines[i])
                         i += 1
-                    # Process the complete comment block
-                    comment_text = "\n".join(comment_block_lines)
-                    if self.is_copyright_header(comment_text, comment_syntax):
-                        copyright_header_lines.extend(comment_block_lines)
-                        found_copyright = True
-                    else:
-                        content_lines.extend(comment_block_lines)
-                    continue
-
-                # Handle HTML-style comments
-                elif stripped.startswith("<!--"):
-                    in_comment_block = True
-                    comment_block_lines = [line]
-                    i += 1
-                    while i < len(lines) and in_comment_block:
-                        line = lines[i]
-                        comment_block_lines.append(line)
-                        if "-->" in line:
-                            in_comment_block = False
+                    if i < len(lines):
+                        comment_lines.append(lines[i])
                         i += 1
-                    # Process the complete comment block
-                    comment_text = "\n".join(comment_block_lines)
-                    if self.is_copyright_header(comment_text):
-                        copyright_header_lines.extend(comment_block_lines)
-                        found_copyright = True
-                    else:
-                        content_lines.extend(comment_block_lines)
+                    comment_text = "\n".join(comment_lines)
+                    sections.append(
+                        FileSection(
+                            comment_text,
+                            is_comment_block=True,
+                            is_copyright=self.is_copyright_text(comment_text),
+                            comment_syntax=comment_syntax,
+                        )
+                    )
                     continue
-
-                # Handle single-line comments
-                elif stripped.startswith("#") or stripped.startswith("<#"):
-                    comment_block_lines.append(line)
+            else:  # Single-line comments
+                if line.strip().startswith(comment_syntax["start"]):
+                    if current_section:
+                        sections.append(FileSection("\n".join(current_section)))
+                        current_section = []
+                    comment_lines = [line]
+                    while i + 1 < len(lines) and lines[i + 1].strip().startswith(
+                        comment_syntax["start"]
+                    ):
+                        i += 1
+                        comment_lines.append(lines[i])
+                    comment_text = "\n".join(comment_lines)
+                    sections.append(
+                        FileSection(
+                            comment_text,
+                            is_comment_block=True,
+                            is_copyright=self.is_copyright_text(comment_text),
+                            comment_syntax=comment_syntax,
+                        )
+                    )
                     i += 1
                     continue
 
-                # End of comment block or standalone comment
-                if comment_block_lines:
-                    comment_text = "\n".join(comment_block_lines)
-                    if self.is_copyright_header(comment_text):
-                        copyright_header_lines.extend(comment_block_lines)
-                        found_copyright = True
-                    else:
-                        content_lines.extend(comment_block_lines)
-                    comment_block_lines = []
-
-            if not comment_block_lines:
-                content_lines.append(line)
+            current_section.append(line)
             i += 1
 
-        # Handle any remaining comment block
-        if comment_block_lines:
-            comment_text = "\n".join(comment_block_lines)
-            if self.is_copyright_header(comment_text):
-                copyright_header_lines.extend(comment_block_lines)
-            else:
-                content_lines.extend(comment_block_lines)
+        if current_section:
+            sections.append(FileSection("\n".join(current_section)))
 
-        return (
-            "\n".join(special_header_lines) + "\n" if special_header_lines else "",
-            "\n".join(copyright_header_lines) + "\n" if copyright_header_lines else "",
-            "\n".join(content_lines),
-        )
+        return sections
 
     def process_file(self, filepath: str) -> bool:
         """Process a single file - add or update header if needed."""
         if self.should_ignore(filepath):
             return False
 
-        comment_syntax = self.get_comment_syntax(filepath)
-        if not comment_syntax:
+        file_config = self.get_file_config(filepath)
+        if not file_config:
             return False
 
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            special_header, existing_copyright, remaining_content = (
-                self.extract_special_header(content, filepath)
-            )
-            new_header = self.format_header(comment_syntax)
+            sections = self.parse_file_content(content, filepath)
 
-            # If existing copyright matches exactly (including whitespace), no update needed
-            if existing_copyright and existing_copyright.strip() == new_header.strip():
+            # Check if copyright header already exists and matches
+            existing_copyright = next((s for s in sections if s.is_copyright), None)
+            new_header = self.format_header(file_config["comment"])
+
+            if (
+                existing_copyright
+                and existing_copyright.content.strip() == new_header.strip()
+            ):
                 return False
 
-            # Normalize and combine all parts
-            parts = []
+            # Build new content
+            new_sections = []
+            copyright_added = False
 
-            # Add special header if present (e.g., shebang)
-            if special_header.strip():
-                parts.append(special_header.strip())
+            # Add special sections first
+            special_sections = [s for s in sections if s.is_special]
+            if special_sections:
+                new_sections.extend(special_sections)
 
-            # Add the new copyright header
-            parts.append(new_header.strip())
+            # Add copyright header
+            new_sections.append(FileSection(new_header, is_copyright=True))
 
-            # Add remaining content if present
-            if remaining_content.strip():
-                parts.append(remaining_content.strip())
+            # Add remaining non-special, non-copyright sections
+            remaining_sections = [
+                s for s in sections if not s.is_special and not s.is_copyright
+            ]
+            if remaining_sections:
+                new_sections.extend(remaining_sections)
 
-            # Join with exactly one blank line between parts
-            updated_content = "\n\n".join(parts) + "\n"
+            # Join sections with appropriate spacing
+            output_parts = []
+            for i, section in enumerate(new_sections):
+                if i > 0 and (section.is_special or new_sections[i - 1].is_special):
+                    output_parts.append(section.content)
+                else:
+                    output_parts.append(section.content.strip())
+
+            updated_content = "\n\n".join(output_parts) + "\n"
 
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(updated_content)
@@ -305,7 +309,7 @@ class AutoHeader:
 
 def main():
     parser = argparse.ArgumentParser(description="Manage file headers in a repository")
-    parser.add_argument("--directory", help="Root directory to process")
+    parser.add_argument("--directory", required=True, help="Root directory to process")
     parser.add_argument(
         "--header",
         default="Copyright Example Ltd, UK 2025",
