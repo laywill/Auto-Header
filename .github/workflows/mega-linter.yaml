@@ -1,0 +1,57 @@
+################################################################################
+# MegaLinter Workflow
+# - Uses MegaLinter with focused configuration
+# - Enables specific linters for Python, YAML, Markdown
+# - Includes security scanners (secretlint, gitleaks, trivy)
+# - Uploads reports as artifacts
+################################################################################
+
+name: MegaLinter
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  megalinter:
+    name: MegaLinter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: MegaLinter
+        uses: oxsecurity/megalinter@v7
+        env:
+          VALIDATE_ALL_CODEBASE: true
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISABLE: SPELL # Disable spell checking
+          # Enable specific linters
+          ENABLE_LINTERS: |
+            PYTHON_PYLINT,
+            PYTHON_BLACK,
+            PYTHON_ISORT,
+            PYTHON_MYPY,
+            YAML_YAMLLINT,
+            MARKDOWN_MARKDOWNLINT,
+            REPOSITORY_SECRETLINT,
+            REPOSITORY_GITLEAKS,
+            REPOSITORY_TRIVY
+          # Python specific settings
+          PYTHON_PYLINT_ARGUMENTS: "--rcfile=.pylintrc"
+          PYTHON_BLACK_ARGUMENTS: "--line-length=100"
+          PYTHON_ISORT_ARGUMENTS: "--profile=black --line-length=100"
+          
+      - name: Upload MegaLinter artifacts
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MegaLinter reports
+          path: |
+            megalinter-reports
+            mega-linter.log

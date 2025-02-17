@@ -1,0 +1,29 @@
+################################################################################
+# Dependabot Configuration
+# - Monitors Python dependencies
+# - Monitors GitHub Actions
+# - Groups updates for easier management
+# - Weekly schedule
+################################################################################
+
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -1,0 +1,60 @@
+################################################################################
+# Test Workflow
+# - Runs on multiple Python versions (3.9-3.12)
+# - Uses pytest with coverage reporting
+# - Generates coverage reports for shields.io badge
+# - Caches pip dependencies
+################################################################################
+
+name: Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+    
+    - name: Run tests with pytest
+      run: |
+        pytest --cov=auto_header --cov-report=xml
+    
+    - name: Get Coverage
+      if: matrix.python-version == '3.12'  # Only update coverage once
+      run: |
+        COVERAGE=$(python -c "import xml.etree.ElementTree as ET; print(ET.parse('coverage.xml').getroot().get('line-rate'))")
+        COVERAGE_PCT=$(python -c "print(round(float('${COVERAGE}') * 100, 2))")
+        echo "COVERAGE_PCT=${COVERAGE_PCT}" >> $GITHUB_ENV
+    
+    - name: Create Coverage Badge
+      if: matrix.python-version == '3.12'
+      uses: schneegans/dynamic-badges-action@v1.7.0
+      with:
+        auth: ${{ secrets.GIST_TOKEN }}
+        gistID: 15b3c888d007ceb1043c9a608b9927bb
+        filename: coverage-badge.json
+        label: coverage
+        message: ${{ env.COVERAGE_PCT }}%
+        color: ${{ env.COVERAGE_PCT >= 90 && 'success' || env.COVERAGE_PCT >= 75 && 'yellow' || 'critical' }}
+        namedLogo: python
