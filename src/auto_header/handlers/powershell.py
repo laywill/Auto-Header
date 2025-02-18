@@ -62,15 +62,15 @@ class PowerShellHandler(FileHandler):
 
     def parse_file_content(self, content: str) -> List[FileSection]:
         """Parse PowerShell file content into logical sections."""
-        lines = content.splitlines()
+        # Preserve exact line endings, including trailing newlines
+        lines = content.splitlines(keepends=True)
+
+        # If the file doesn't end with a newline, we need to handle the last line specially
+        if content and not content.endswith("\n"):
+            lines[-1] = lines[-1] + "\n"
+
         sections: List[FileSection] = []
         processed_indices: Set[int] = set()
-
-        def find_next_non_empty(idx: int) -> int:
-            """Find the next non-empty line index."""
-            while idx < len(lines) and not lines[idx].strip():
-                idx += 1
-            return idx
 
         def extract_help_block(start_idx: int) -> Tuple[List[str], int]:
             """Extract a help comment block."""
@@ -148,7 +148,7 @@ class PowerShellHandler(FileHandler):
             # Handle help blocks
             elif stripped.startswith("<#"):
                 block_lines, end_idx = extract_help_block(i)
-                block_text = "\n".join(block_lines)
+                block_text = "".join(block_lines)
 
                 # Check if it's a help block
                 if any(
@@ -185,7 +185,7 @@ class PowerShellHandler(FileHandler):
                 for j in range(max(0, i - 5), i)  # Look at previous 5 non-empty lines
             ):
                 block_lines, end_idx = extract_param_block(i)
-                sections.append(FileSection("\n".join(block_lines), is_special=True))
+                sections.append(FileSection("".join(block_lines), is_special=True))
                 processed_indices.update(range(i, end_idx + 1))
                 i = end_idx
 
@@ -203,15 +203,15 @@ class PowerShellHandler(FileHandler):
         # Find the split point between header sections and main content
         special_sections = []
         main_content_start = None
+        header_empty_lines = []
 
         for i, section in enumerate(sections):
             if section.is_special or section.is_copyright:
                 special_sections.append(section)
             elif not section.content.strip():
-                # Keep empty lines with the previous section type
-                if special_sections and main_content_start is None:
-                    special_sections.append(section)
-                continue
+                # Keep track of empty lines
+                if main_content_start is None:
+                    header_empty_lines.append(section)
             elif main_content_start is None:
                 main_content_start = i
                 break
@@ -221,17 +221,13 @@ class PowerShellHandler(FileHandler):
         using_sections = []
         help_sections = []
         param_sections = []
-        empty_lines = []
 
         # Process the copyright text to remove any comment markers
         copyright_text = new_header.replace("<#", "").replace("#>", "").strip()
 
         for section in special_sections:
             content = section.content
-            if not content.strip():
-                empty_lines.append(section)
-                continue
-            elif content.strip().startswith("#requires"):
+            if content.strip().startswith("#requires"):
                 requires_sections.append(section)
             elif content.strip().startswith("using"):
                 using_sections.append(section)
@@ -243,17 +239,20 @@ class PowerShellHandler(FileHandler):
         # Build header part
         output_parts = []
 
+        # Helper to add empty lines between sections
+        def add_empty_line():
+            if header_empty_lines:
+                output_parts.append(header_empty_lines.pop(0).content)
+
         # 1. Requires statements
         if requires_sections:
             output_parts.extend(s.content for s in requires_sections)
-            if empty_lines:
-                output_parts.append(empty_lines.pop(0).content)
+            add_empty_line()
 
         # 2. Using statements
         if using_sections:
             output_parts.extend(s.content for s in using_sections)
-            if empty_lines:
-                output_parts.append(empty_lines.pop(0).content)
+            add_empty_line()
 
         # 3. Help block (with copyright)
         if help_sections:
@@ -264,21 +263,32 @@ class PowerShellHandler(FileHandler):
         else:
             # Create new help block with copyright
             output_parts.append(self.create_help_block(copyright_text))
-        if empty_lines:
-            output_parts.append(empty_lines.pop(0).content)
+        add_empty_line()
 
         # 4. Param block
         if param_sections:
             output_parts.extend(s.content for s in param_sections)
-            if empty_lines:
-                output_parts.append(empty_lines.pop(0).content)
+            add_empty_line()  # Preserve blank line after param block
 
-        # Join the header part
-        header_part = "\n".join(output_parts)
-
-        # If we found main content, append it exactly as-is
+        # If we found main content, preserve it exactly as-is
         if main_content_start is not None:
-            main_content = [s.content for s in sections[main_content_start:]]
-            return header_part + "\n" + "\n".join(main_content)
+            # Get remaining empty lines that should go before main content
+            while header_empty_lines:
+                output_parts.append(header_empty_lines.pop(0).content)
 
-        return header_part + "\n"
+            # Add main content
+            main_content = [s.content for s in sections[main_content_start:]]
+            result = "".join(output_parts + main_content)
+
+            # Ensure the file ends with exactly the same number of newlines as the original
+            original_trailing_newlines = len(sections[-1].content) - len(
+                sections[-1].content.rstrip("\n")
+            )
+            if original_trailing_newlines > 0:
+                result = result.rstrip("\n") + "\n" * original_trailing_newlines
+
+            return result
+
+        # Preserve trailing newlines if no main content
+        result = "".join(output_parts)
+        return result
