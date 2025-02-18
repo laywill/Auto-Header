@@ -1,5 +1,6 @@
 from ..core import FileHandler, FileSection
 from typing import Dict, List, Set, Tuple
+import re
 
 
 class PowerShellHandler(FileHandler):
@@ -22,6 +23,44 @@ class PowerShellHandler(FileHandler):
             r"^using\s+namespace\s+.*",
         ]
 
+    def create_help_block(self, copyright_text: str) -> str:
+        """Create a new help block with copyright information."""
+        return f"<#\n.COPYRIGHT\n{copyright_text}\n#>"
+
+    def update_help_block(self, help_block: str, copyright_text: str) -> str:
+        """Update an existing help block with copyright information."""
+        lines = help_block.splitlines()
+        new_lines = []
+        copyright_added = False
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith(".COPYRIGHT"):
+                # Skip the old copyright section
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith("."):
+                    i += 1
+                # Add new copyright
+                new_lines.append(".COPYRIGHT")
+                new_lines.append(copyright_text)
+                copyright_added = True
+            else:
+                new_lines.append(lines[i])
+                i += 1
+
+        # If no copyright section was found, add it before the closing #>
+        if not copyright_added:
+            if new_lines[-1].strip() == "#>":
+                new_lines.insert(-1, ".COPYRIGHT")
+                new_lines.insert(-1, copyright_text)
+            else:
+                new_lines.append(".COPYRIGHT")
+                new_lines.append(copyright_text)
+                new_lines.append("#>")
+
+        return "\n".join(new_lines)
+
     def parse_file_content(self, content: str) -> List[FileSection]:
         """Parse PowerShell file content into logical sections."""
         lines = content.splitlines()
@@ -32,7 +71,6 @@ class PowerShellHandler(FileHandler):
             """Extract a help comment block."""
             block_lines = [lines[start_idx]]
             end_idx = start_idx
-            brace_level = 1
 
             while end_idx + 1 < len(lines):
                 end_idx += 1
@@ -50,6 +88,10 @@ class PowerShellHandler(FileHandler):
             paren_count = 1  # Start with 1 for the opening parenthesis
             brace_count = 0
 
+            # Skip any leading whitespace/comments before the param block
+            while not lines[start_idx].strip().lower().startswith("param"):
+                start_idx += 1
+
             # Count initial parentheses in first line
             first_line = lines[start_idx]
             paren_count += first_line.count("(") - 1  # -1 because we started with 1
@@ -58,7 +100,7 @@ class PowerShellHandler(FileHandler):
 
             while end_idx + 1 < len(lines):
                 end_idx += 1
-                line = lines[end_idx]
+                line = lines[end_idx].rstrip()
 
                 # Update counts
                 paren_count += line.count("(") - line.count(")")
@@ -91,12 +133,16 @@ class PowerShellHandler(FileHandler):
                 sections.append(FileSection(line, is_special=True))
                 processed_indices.add(i)
 
-            # Handle help blocks (must come before param blocks)
+            # Handle help blocks
             elif stripped.startswith("<#"):
                 block_lines, end_idx = extract_help_block(i)
                 block_text = "\n".join(block_lines)
 
-                if ".SYNOPSIS" in block_text or ".DESCRIPTION" in block_text:
+                # Check if it's a help block
+                if any(
+                    tag in block_text
+                    for tag in [".SYNOPSIS", ".DESCRIPTION", ".COPYRIGHT"]
+                ):
                     sections.append(FileSection(block_text, is_special=True))
                 else:
                     sections.append(
@@ -110,16 +156,15 @@ class PowerShellHandler(FileHandler):
                 i = end_idx
 
             # Handle param blocks
-            elif stripped.lower().startswith("param"):
+            elif stripped.lower().startswith("param") or (
+                stripped.startswith("[")
+                and i + 1 < len(lines)
+                and lines[i + 1].strip().lower().startswith("param")
+            ):
                 block_lines, end_idx = extract_param_block(i)
                 sections.append(FileSection("\n".join(block_lines), is_special=True))
                 processed_indices.update(range(i, end_idx + 1))
                 i = end_idx
-
-            # Handle CmdletBinding attribute
-            elif stripped.startswith("[CmdletBinding"):
-                sections.append(FileSection(line, is_special=True))
-                processed_indices.add(i)
 
             # Handle remaining content
             elif not i in processed_indices:
@@ -138,9 +183,11 @@ class PowerShellHandler(FileHandler):
         requires_sections = []
         using_sections = []
         help_sections = []
-        cmdlet_binding_sections = []
         param_sections = []
         main_sections = []
+
+        # Process the copyright text to remove any comment markers
+        copyright_text = new_header.replace("<#", "").replace("#>", "").strip()
 
         for section in sections:
             if section.is_copyright:
@@ -151,13 +198,11 @@ class PowerShellHandler(FileHandler):
                     requires_sections.append(section.content)
                 elif content.startswith("using"):
                     using_sections.append(section.content)
-                elif content.startswith("<#") and (
-                    ".SYNOPSIS" in content or ".DESCRIPTION" in content
-                ):
+                elif content.startswith("<#"):
                     help_sections.append(section.content)
-                elif content.startswith("[CmdletBinding"):
-                    cmdlet_binding_sections.append(section.content)
-                elif content.lower().startswith("param"):
+                elif content.lower().startswith("param") or (
+                    content.startswith("[") and "param" in content.lower()
+                ):
                     param_sections.append(section.content)
             elif not section.is_comment_block:
                 if section.content.strip():  # Only add non-empty lines
@@ -174,26 +219,22 @@ class PowerShellHandler(FileHandler):
             output_parts.extend(using_sections)
             output_parts.append("")
 
-        # 3. Help comment block
+        # 3. Help block (with copyright)
         if help_sections:
-            output_parts.extend(help_sections)
-            output_parts.append("")
+            # Update existing help block with copyright
+            updated_help = self.update_help_block(help_sections[0], copyright_text)
+            output_parts.append(updated_help)
+        else:
+            # Create new help block with copyright
+            output_parts.append(self.create_help_block(copyright_text))
+        output_parts.append("")
 
-        # 4. CmdletBinding (if present)
-        if cmdlet_binding_sections:
-            output_parts.extend(cmdlet_binding_sections)
-            output_parts.append("")
-
-        # 5. Param block
+        # 4. Param block
         if param_sections:
             output_parts.extend(param_sections)
             output_parts.append("")
 
-        # 6. Copyright header
-        output_parts.append(new_header.rstrip())
-        output_parts.append("")
-
-        # 7. Main content
+        # 5. Main content
         if main_sections:
             output_parts.extend(main_sections)
 
