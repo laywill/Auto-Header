@@ -88,6 +88,137 @@ class FileHandler(ABC):
         pass
 
 
+class PythonHandler(FileHandler):
+    """Handler for Python files with support for shebangs, encoding, and docstrings."""
+
+    @property
+    def file_extensions(self) -> List[str]:
+        return [".py"]
+
+    @property
+    def comment_syntax(self) -> Dict[str, str]:
+        return {"start": "#", "end": ""}
+
+    @property
+    def special_patterns(self) -> List[str]:
+        return [
+            r"^#!.*",  # shebang
+            r"^# -\*-.*-\*-$",  # encoding
+            r"^from __future__.*",  # future imports
+            r'^""".*?"""$',  # single-line docstring
+            r'^""".*$',  # start of multi-line docstring
+        ]
+
+    def parse_file_content(self, content: str) -> List[FileSection]:
+        """Parse Python file content preserving special sections."""
+        lines = content.splitlines()
+        sections: List[FileSection] = []
+        current_lines: List[str] = []
+        in_docstring = False
+        processed_indices: Set[int] = set()
+
+        i = 0
+        while i < len(lines):
+            if i in processed_indices:
+                i += 1
+                continue
+
+            line = lines[i].rstrip()
+            stripped = line.strip()
+
+            # Handle docstrings
+            if stripped.startswith('"""'):
+                if stripped.endswith('"""') and len(stripped) > 3:
+                    # Single-line docstring
+                    sections.append(FileSection(line, is_special=True))
+                    processed_indices.add(i)
+                else:
+                    # Multi-line docstring
+                    docstring_lines = [line]
+                    in_docstring = True
+                    i += 1
+                    while i < len(lines) and in_docstring:
+                        line = lines[i]
+                        docstring_lines.append(line)
+                        if '"""' in line:
+                            in_docstring = False
+                        i += 1
+                        processed_indices.add(i - 1)
+                    sections.append(
+                        FileSection("\n".join(docstring_lines), is_special=True)
+                    )
+                    continue
+
+            # Handle special lines (shebang, encoding, future imports)
+            elif self.is_special_line(line):
+                sections.append(FileSection(line, is_special=True))
+                processed_indices.add(i)
+
+            # Handle copyright comments
+            elif stripped.startswith("#"):
+                comment_lines = [line]
+                while i + 1 < len(lines) and lines[i + 1].strip().startswith("#"):
+                    i += 1
+                    comment_lines.append(lines[i])
+                comment_text = "\n".join(comment_lines)
+                sections.append(
+                    FileSection(
+                        comment_text,
+                        is_comment_block=True,
+                        is_copyright=self.is_copyright_text(comment_text),
+                    )
+                )
+                processed_indices.add(i)
+
+            # Handle remaining content
+            elif stripped and i not in processed_indices:
+                sections.append(FileSection(line))
+                processed_indices.add(i)
+
+            i += 1
+
+        return sections
+
+    def create_output(self, sections: List[FileSection], new_header: str) -> str:
+        """Create final output with correct Python file structure."""
+        output_parts: List[str] = []
+
+        # Collect sections by type
+        special_top = []  # shebang, encoding, future imports
+        docstrings = []
+        content = []
+
+        for section in sections:
+            if section.is_copyright:
+                continue
+
+            if section.is_special:
+                text = section.content.strip()
+                if text.startswith('"""'):
+                    docstrings.append(section.content)
+                else:
+                    special_top.append(section.content)
+            elif not section.is_comment_block:
+                content.append(section.content)
+
+        # Add sections in correct order
+        if special_top:
+            output_parts.extend(special_top)
+            output_parts.append("")
+
+        output_parts.append(new_header.rstrip())
+
+        if docstrings:
+            output_parts.append("")
+            output_parts.extend(docstrings)
+
+        if content:
+            output_parts.append("")
+            output_parts.extend(filter(None, content))
+
+        return "\n".join(output_parts) + "\n"
+
+
 class PowerShellHandler(FileHandler):
     """Handler for PowerShell files."""
 
@@ -195,51 +326,67 @@ class PowerShellHandler(FileHandler):
         return sections
 
     def create_output(self, sections: List[FileSection], new_header: str) -> str:
-        """Create the final output with correct PowerShell section ordering."""
-        # Group sections by type
-        requires: List[str] = []
-        using: List[str] = []
-        param: List[str] = []
-        content: List[str] = []
+        """
+        Create the final output with correct PowerShell section ordering.
 
-        for section in sections:
-            if section.is_copyright:
-                continue
+        Header placement rules:
+        1. After param block if it exists
+        2. After using statement if only using and requires exist
+        3. After requires statement if only requires exists
+        4. After using statement if only using exists
+        5. At the start if no special sections exist
+        """
+        # Group sections by type using list comprehensions for efficiency
+        requires = [
+            s.content
+            for s in sections
+            if s.is_special and s.content.strip().startswith("#requires")
+        ]
+        using = [
+            s.content
+            for s in sections
+            if s.is_special and s.content.strip().startswith("using")
+        ]
+        param = [
+            s.content
+            for s in sections
+            if s.is_special
+            and s.content.strip().lower().startswith(("param", "[cmdletbinding"))
+        ]
+        content = [
+            s.content
+            for s in sections
+            if not s.is_special and not s.is_copyright and not s.is_comment_block
+        ]
 
-            stripped = section.content.strip()
-            if section.is_special:
-                if stripped.startswith("#requires"):
-                    requires.append(section.content)
-                elif stripped.startswith("using"):
-                    using.append(section.content)
-                elif stripped.lower().startswith(("param", "[cmdletbinding")):
-                    param.append(section.content)
-            elif not section.is_comment_block:
-                content.append(section.content)
-
-        # Build output with correct ordering and spacing
+        # Build output sections in order
         output_parts: List[str] = []
 
+        # Add requires if present
         if requires:
             output_parts.extend(requires)
 
+        # Add using statements if present
         if using:
             if output_parts:
                 output_parts.append("")
             output_parts.extend(using)
 
+        # Add param blocks if present
         if param:
             if output_parts:
                 output_parts.append("")
             output_parts.extend(param)
 
+        # Add copyright header at the correct position
         if output_parts:
             output_parts.append("")
         output_parts.append(new_header.rstrip())
 
+        # Add remaining content after header
         if content:
             output_parts.append("")
-            output_parts.extend(content)
+            output_parts.extend(filter(None, content))  # Filter out empty strings
 
         return "\n".join(output_parts) + "\n"
 
