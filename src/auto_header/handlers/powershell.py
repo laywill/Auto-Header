@@ -1,3 +1,7 @@
+from ..core import FileHandler, FileSection
+from typing import Dict, List, Set
+
+
 class PowerShellHandler(FileHandler):
     """Handler for PowerShell files."""
 

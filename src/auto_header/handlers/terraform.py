@@ -1,3 +1,7 @@
+from ..core import FileHandler, FileSection
+from typing import Dict, List, Set
+
+
 class TerraformHandler(FileHandler):
     """Handler for Terraform files."""
 
