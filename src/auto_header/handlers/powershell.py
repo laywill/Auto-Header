@@ -32,28 +32,42 @@ class PowerShellHandler(FileHandler):
             """Extract a help comment block."""
             block_lines = [lines[start_idx]]
             end_idx = start_idx
+            brace_level = 1
 
             while end_idx + 1 < len(lines):
                 end_idx += 1
-                block_lines.append(lines[end_idx])
-                if "#>" in lines[end_idx]:
+                line = lines[end_idx]
+                block_lines.append(line)
+                if "#>" in line:
                     break
 
             return block_lines, end_idx
 
         def extract_param_block(start_idx: int) -> Tuple[List[str], int]:
-            """Extract a param block, handling nested braces."""
+            """Extract a param block, handling nested braces and parentheses."""
             block_lines = [lines[start_idx]]
             end_idx = start_idx
-            brace_count = lines[start_idx].count("{") - lines[start_idx].count("}")
+            paren_count = 1  # Start with 1 for the opening parenthesis
+            brace_count = 0
 
-            while end_idx + 1 < len(lines) and (
-                brace_count > 0 or ")" not in lines[end_idx]
-            ):
+            # Count initial parentheses in first line
+            first_line = lines[start_idx]
+            paren_count += first_line.count("(") - 1  # -1 because we started with 1
+            paren_count -= first_line.count(")")
+            brace_count += first_line.count("{") - first_line.count("}")
+
+            while end_idx + 1 < len(lines):
                 end_idx += 1
-                block_lines.append(lines[end_idx])
-                brace_count += lines[end_idx].count("{") - lines[end_idx].count("}")
-                if brace_count == 0 and ")" in lines[end_idx]:
+                line = lines[end_idx]
+
+                # Update counts
+                paren_count += line.count("(") - line.count(")")
+                brace_count += line.count("{") - line.count("}")
+
+                block_lines.append(line)
+
+                # Check if we've reached the end of the param block
+                if paren_count == 0 and brace_count <= 0:
                     break
 
             return block_lines, end_idx
@@ -77,23 +91,14 @@ class PowerShellHandler(FileHandler):
                 sections.append(FileSection(line, is_special=True))
                 processed_indices.add(i)
 
-            # Handle param blocks
-            elif stripped.lower().startswith("param"):
-                block_lines, end_idx = extract_param_block(i)
-                sections.append(FileSection("\n".join(block_lines), is_special=True))
-                processed_indices.update(range(i, end_idx + 1))
-                i = end_idx
-
-            # Handle help and copyright blocks
+            # Handle help blocks (must come before param blocks)
             elif stripped.startswith("<#"):
-                if ".SYNOPSIS" in stripped or ".DESCRIPTION" in stripped:
-                    block_lines, end_idx = extract_help_block(i)
-                    sections.append(
-                        FileSection("\n".join(block_lines), is_special=True)
-                    )
+                block_lines, end_idx = extract_help_block(i)
+                block_text = "\n".join(block_lines)
+
+                if ".SYNOPSIS" in block_text or ".DESCRIPTION" in block_text:
+                    sections.append(FileSection(block_text, is_special=True))
                 else:
-                    block_lines, end_idx = extract_help_block(i)
-                    block_text = "\n".join(block_lines)
                     sections.append(
                         FileSection(
                             block_text,
@@ -104,16 +109,20 @@ class PowerShellHandler(FileHandler):
                 processed_indices.update(range(i, end_idx + 1))
                 i = end_idx
 
+            # Handle param blocks
+            elif stripped.lower().startswith("param"):
+                block_lines, end_idx = extract_param_block(i)
+                sections.append(FileSection("\n".join(block_lines), is_special=True))
+                processed_indices.update(range(i, end_idx + 1))
+                i = end_idx
+
             # Handle CmdletBinding attribute
             elif stripped.startswith("[CmdletBinding"):
                 sections.append(FileSection(line, is_special=True))
                 processed_indices.add(i)
 
             # Handle remaining content
-            elif stripped and i not in processed_indices:
-                sections.append(FileSection(line))
-                processed_indices.add(i)
-            elif not stripped and i not in processed_indices:
+            elif not i in processed_indices:
                 sections.append(FileSection(line))
                 processed_indices.add(i)
 
@@ -129,6 +138,7 @@ class PowerShellHandler(FileHandler):
         requires_sections = []
         using_sections = []
         help_sections = []
+        cmdlet_binding_sections = []
         param_sections = []
         main_sections = []
 
@@ -145,11 +155,15 @@ class PowerShellHandler(FileHandler):
                     ".SYNOPSIS" in content or ".DESCRIPTION" in content
                 ):
                     help_sections.append(section.content)
+                elif content.startswith("[CmdletBinding"):
+                    cmdlet_binding_sections.append(section.content)
                 elif content.lower().startswith("param"):
                     param_sections.append(section.content)
             elif not section.is_comment_block:
-                main_sections.append(section.content)
+                if section.content.strip():  # Only add non-empty lines
+                    main_sections.append(section.content)
 
+        # Build output in PowerShell standard order
         # 1. Requires statements
         if requires_sections:
             output_parts.extend(requires_sections)
@@ -165,17 +179,22 @@ class PowerShellHandler(FileHandler):
             output_parts.extend(help_sections)
             output_parts.append("")
 
-        # 4. Param block
+        # 4. CmdletBinding (if present)
+        if cmdlet_binding_sections:
+            output_parts.extend(cmdlet_binding_sections)
+            output_parts.append("")
+
+        # 5. Param block
         if param_sections:
             output_parts.extend(param_sections)
             output_parts.append("")
 
-        # 5. Copyright header
+        # 6. Copyright header
         output_parts.append(new_header.rstrip())
         output_parts.append("")
 
-        # 6. Main content
+        # 7. Main content
         if main_sections:
-            output_parts.extend(filter(None, main_sections))
+            output_parts.extend(main_sections)
 
         return "\n".join(output_parts) + "\n"
