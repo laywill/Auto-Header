@@ -3,11 +3,11 @@ from typing import Dict, List, Set
 
 
 class YAMLHandler(FileHandler):
-    """Handler for YAML files with support for shebangs, encoding, and docstrings."""
+    """Handler for YAML files with support for document markers and comments."""
 
     @property
     def file_extensions(self) -> List[str]:
-        return [".py"]
+        return [".yml", ".yaml"]
 
     @property
     def comment_syntax(self) -> Dict[str, str]:
@@ -16,15 +16,16 @@ class YAMLHandler(FileHandler):
     @property
     def special_patterns(self) -> List[str]:
         return [
-            r"^---$",  # Document Start
+            r"^---\s*$",  # YAML document marker
+            r"^%YAML.*$",  # YAML version
+            r"^%TAG.*$",  # YAML tag directives
         ]
 
     def parse_file_content(self, content: str) -> List[FileSection]:
-        """Parse YAML file content preserving special sections."""
+        """Parse YAML file content preserving document markers and special sections."""
         lines = content.splitlines()
         sections: List[FileSection] = []
         current_lines: List[str] = []
-        in_docstring = False
         processed_indices: Set[int] = set()
 
         i = 0
@@ -36,7 +37,7 @@ class YAMLHandler(FileHandler):
             line = lines[i].rstrip()
             stripped = line.strip()
 
-            # Handle special lines (shebang, encoding, future imports)
+            # Handle document markers and directives
             if self.is_special_line(line):
                 sections.append(FileSection(line, is_special=True))
                 processed_indices.add(i)
@@ -61,43 +62,43 @@ class YAMLHandler(FileHandler):
             elif stripped and i not in processed_indices:
                 sections.append(FileSection(line))
                 processed_indices.add(i)
+            elif not stripped and i not in processed_indices:
+                # Preserve empty lines
+                sections.append(FileSection(line))
+                processed_indices.add(i)
 
             i += 1
 
         return sections
 
     def create_output(self, sections: List[FileSection], new_header: str) -> str:
-        """Create final output with correct Python file structure."""
+        """Create final output with correct YAML file structure."""
         output_parts: List[str] = []
 
-        # Collect sections by type
-        special_top = []  # shebang, encoding, future imports
-        docstrings = []
-        content = []
+        # Handle document start marker separately
+        doc_start = next(
+            (
+                s.content
+                for s in sections
+                if s.is_special and s.content.strip() == "---"
+            ),
+            None,
+        )
 
-        for section in sections:
-            if section.is_copyright:
-                continue
-
-            if section.is_special:
-                text = section.content.strip()
-                if text.startswith('"""'):
-                    docstrings.append(section.content)
-                else:
-                    special_top.append(section.content)
-            elif not section.is_comment_block:
-                content.append(section.content)
-
-        # Add sections in correct order
-        if special_top:
-            output_parts.extend(special_top)
+        # Add document start if it exists
+        if doc_start:
+            output_parts.append(doc_start)
             output_parts.append("")
+            output_parts.append(new_header.rstrip())
+        else:
+            output_parts.append(new_header.rstrip())
 
-        output_parts.append(new_header.rstrip())
-
-        if docstrings:
-            output_parts.append("")
-            output_parts.extend(docstrings)
+        # Add remaining content
+        content = [
+            s.content
+            for s in sections
+            if not s.is_copyright and not (s.is_special and s.content.strip() == "---")
+        ]
 
         if content:
             output_parts.append("")
