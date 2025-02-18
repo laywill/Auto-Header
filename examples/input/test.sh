@@ -1,5 +1,11 @@
 #!/bin/bash
-set -euo pipefail
-export LANG=C
 
-# Rest of script...
+set -euo pipefail
+
+MESSAGE='Hello World!'
+
+hello () {
+   echo "$MESSAGE"
+}
+
+hello

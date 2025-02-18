@@ -1,7 +1,13 @@
 #!/bin/bash
+
+# Copyright YourCompany Ltd 2025
+
 set -euo pipefail
-export LANG=C
 
-# Copyright Example Ltd, UK 2025
+MESSAGE='Hello World!'
 
-# Rest of script...
+hello () {
+   echo "$MESSAGE"
+}
+
+hello
