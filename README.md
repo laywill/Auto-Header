@@ -10,15 +10,27 @@ Maintaining up-to-date headers (e.g. Copyright headers) is really boring. This a
 
 ```plaintext
 auto-header/
-│
 ├── src/
 │   └── auto_header/
-│       ├── __init__.py
-│       └── main.py           # Our auto header implementation
-│
+│       ├── __init__.py                 # Package initialization
+│       ├── core.py                     # Core classes (FileSection, FileHandler base class)
+│       ├── handlers/                   # Directory for all file type handlers
+│       │   ├── __init__.py            # Handler registration
+│       │   ├── powershell.py          # PowerShell handler
+│       │   ├── python.py              # Python handler
+│       │   ├── bash.py                # Bash handler
+│       │   ├── terraform.py           # Terraform handler
+│       │   └── yaml.py                # YAML handler
+│       ├── cli.py                     # Command-line interface
+│       └── main.py                    # AutoHeader class and main functionality
 ├── tests/
 │   ├── __init__.py
-│   └── test_auto_header.py
+│   ├── test_core.py                   # Tests for core functionality
+│   └── handlers/                      # Handler-specific tests
+│       ├── __init__.py
+│       ├── test_powershell.py
+│       ├── test_python.py
+│       └── ...
 │
 ├── .gitignore
 ├── pyproject.toml           # Modern Python packaging config
