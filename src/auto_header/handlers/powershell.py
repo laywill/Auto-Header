@@ -132,37 +132,36 @@ class PowerShellHandler(FileHandler):
             elif not section.is_comment_block:
                 content_sections.append(section.content)
 
-        # Build output based on rules:
-        # 1. After param block if it exists
-        # 2. After using statement if only using and requires exist
-        # 3. After requires statement if only requires exists
-        # 4. After using statement if only using exists
-        # 5. At the start if no special sections exist
-
-        # Add requires if present
+        # Add sections in the correct order
+        # First: requires (if present)
         if requires_sections:
             output_parts.extend(requires_sections)
 
-        # Add using statements if present
+        # Second: using statements (if present)
         if using_sections:
             if output_parts:
                 output_parts.append("")
             output_parts.extend(using_sections)
 
-        # Add param blocks if present
+        # Third: param blocks (if present)
         if param_sections:
             if output_parts:
                 output_parts.append("")
             output_parts.extend(param_sections)
 
-        # Add header based on what sections exist
-        if output_parts:
+        # Fourth: Insert header according to rules:
+        # - After param block if it exists
+        # - After using statement if only using and requires exist
+        # - After requires statement if only requires exists
+        # - After using statement if only using exists
+        # - At the start if no special sections exist
+        if output_parts:  # If we have any special sections
             output_parts.append("")
         output_parts.append(new_header.rstrip())
 
-        # Add remaining content
+        # Finally: Add remaining content
         if content_sections:
             output_parts.append("")
-            output_parts.extend(content_sections)
+            output_parts.extend(filter(None, content_sections))
 
         return "\n".join(output_parts) + "\n"
