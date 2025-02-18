@@ -155,11 +155,22 @@ class PowerShellHandler(FileHandler):
                 processed_indices.update(range(i, end_idx + 1))
                 i = end_idx
 
-            # Handle param blocks
-            elif stripped.lower().startswith("param") or (
-                stripped.startswith("[")
-                and i + 1 < len(lines)
-                and lines[i + 1].strip().lower().startswith("param")
+            # Handle param blocks - only match top-level param blocks
+            elif (
+                stripped.lower().startswith("param")
+                or (
+                    stripped.startswith("[")
+                    and i + 1 < len(lines)
+                    and lines[i + 1].strip().lower().startswith("param")
+                )
+            ) and not any(
+                # Check previous non-empty lines for function or other block starters
+                lines[j].strip()
+                and (
+                    lines[j].strip().startswith("function")
+                    or lines[j].strip().startswith("{")
+                )
+                for j in range(max(0, i - 5), i)  # Look at previous 5 non-empty lines
             ):
                 block_lines, end_idx = extract_param_block(i)
                 sections.append(FileSection("\n".join(block_lines), is_special=True))
