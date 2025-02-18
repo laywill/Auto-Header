@@ -1,6 +1,5 @@
 from ..core import FileHandler, FileSection
 from typing import Dict, List, Set, Tuple
-import re
 
 
 class PowerShellHandler(FileHandler):
@@ -67,6 +66,12 @@ class PowerShellHandler(FileHandler):
         sections: List[FileSection] = []
         processed_indices: Set[int] = set()
 
+        def find_next_non_empty(idx: int) -> int:
+            """Find the next non-empty line index."""
+            while idx < len(lines) and not lines[idx].strip():
+                idx += 1
+            return idx
+
         def extract_help_block(start_idx: int) -> Tuple[List[str], int]:
             """Extract a help comment block."""
             block_lines = [lines[start_idx]]
@@ -100,7 +105,7 @@ class PowerShellHandler(FileHandler):
 
             while end_idx + 1 < len(lines):
                 end_idx += 1
-                line = lines[end_idx].rstrip()
+                line = lines[end_idx]
 
                 # Update counts
                 paren_count += line.count("(") - line.count(")")
@@ -120,8 +125,15 @@ class PowerShellHandler(FileHandler):
                 i += 1
                 continue
 
-            line = lines[i].rstrip()
+            line = lines[i]  # Keep original whitespace
             stripped = line.strip()
+
+            # Handle empty lines
+            if not stripped:
+                sections.append(FileSection(line))
+                processed_indices.add(i)
+                i += 1
+                continue
 
             # Handle requires statements
             if stripped.startswith("#requires"):
@@ -188,65 +200,85 @@ class PowerShellHandler(FileHandler):
 
     def create_output(self, sections: List[FileSection], new_header: str) -> str:
         """Create final output with correct PowerShell section ordering."""
-        output_parts: List[str] = []
+        # Find the split point between header sections and main content
+        special_sections = []
+        main_content_start = None
 
-        # Extract different types of sections
+        for i, section in enumerate(sections):
+            if section.is_special or section.is_copyright:
+                special_sections.append(section)
+            elif not section.content.strip():
+                # Keep empty lines with the previous section type
+                if special_sections and main_content_start is None:
+                    special_sections.append(section)
+                continue
+            elif main_content_start is None:
+                main_content_start = i
+                break
+
+        # Process special sections
         requires_sections = []
         using_sections = []
         help_sections = []
         param_sections = []
-        main_sections = []
+        empty_lines = []
 
         # Process the copyright text to remove any comment markers
         copyright_text = new_header.replace("<#", "").replace("#>", "").strip()
 
-        for section in sections:
-            if section.is_copyright:
+        for section in special_sections:
+            content = section.content
+            if not content.strip():
+                empty_lines.append(section)
                 continue
-            elif section.is_special:
-                content = section.content.strip()
-                if content.startswith("#requires"):
-                    requires_sections.append(section.content)
-                elif content.startswith("using"):
-                    using_sections.append(section.content)
-                elif content.startswith("<#"):
-                    help_sections.append(section.content)
-                elif content.lower().startswith("param") or (
-                    content.startswith("[") and "param" in content.lower()
-                ):
-                    param_sections.append(section.content)
-            elif not section.is_comment_block:
-                if section.content.strip():  # Only add non-empty lines
-                    main_sections.append(section.content)
+            elif content.strip().startswith("#requires"):
+                requires_sections.append(section)
+            elif content.strip().startswith("using"):
+                using_sections.append(section)
+            elif content.strip().startswith("<#"):
+                help_sections.append(section)
+            elif content.strip().lower().startswith("param"):
+                param_sections.append(section)
 
-        # Build output in PowerShell standard order
+        # Build header part
+        output_parts = []
+
         # 1. Requires statements
         if requires_sections:
-            output_parts.extend(requires_sections)
-            output_parts.append("")
+            output_parts.extend(s.content for s in requires_sections)
+            if empty_lines:
+                output_parts.append(empty_lines.pop(0).content)
 
         # 2. Using statements
         if using_sections:
-            output_parts.extend(using_sections)
-            output_parts.append("")
+            output_parts.extend(s.content for s in using_sections)
+            if empty_lines:
+                output_parts.append(empty_lines.pop(0).content)
 
         # 3. Help block (with copyright)
         if help_sections:
             # Update existing help block with copyright
-            updated_help = self.update_help_block(help_sections[0], copyright_text)
+            existing_help = next(s.content for s in help_sections)
+            updated_help = self.update_help_block(existing_help, copyright_text)
             output_parts.append(updated_help)
         else:
             # Create new help block with copyright
             output_parts.append(self.create_help_block(copyright_text))
-        output_parts.append("")
+        if empty_lines:
+            output_parts.append(empty_lines.pop(0).content)
 
         # 4. Param block
         if param_sections:
-            output_parts.extend(param_sections)
-            output_parts.append("")
+            output_parts.extend(s.content for s in param_sections)
+            if empty_lines:
+                output_parts.append(empty_lines.pop(0).content)
 
-        # 5. Main content
-        if main_sections:
-            output_parts.extend(main_sections)
+        # Join the header part
+        header_part = "\n".join(output_parts)
 
-        return "\n".join(output_parts) + "\n"
+        # If we found main content, append it exactly as-is
+        if main_content_start is not None:
+            main_content = [s.content for s in sections[main_content_start:]]
+            return header_part + "\n" + "\n".join(main_content)
+
+        return header_part + "\n"
