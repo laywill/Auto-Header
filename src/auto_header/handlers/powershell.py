@@ -26,36 +26,35 @@ class PowerShellHandler(FileHandler):
         """Parse PowerShell file content into logical sections."""
         lines = content.splitlines()
         sections: List[FileSection] = []
-        current_lines: List[str] = []
         processed_indices: Set[int] = set()
 
-        def extract_block(start_idx: int, block_type: str) -> Tuple[List[str], int]:
-            """Extract a block of content starting at the given index."""
+        def extract_help_block(start_idx: int) -> Tuple[List[str], int]:
+            """Extract a help comment block."""
             block_lines = [lines[start_idx]]
             end_idx = start_idx
 
-            if block_type == "param":
-                brace_count = lines[start_idx].count("{") - lines[start_idx].count("}")
+            while end_idx + 1 < len(lines):
                 end_idx += 1
-                while end_idx < len(lines) and (
-                    brace_count > 0 or "}" not in lines[end_idx]
-                ):
-                    block_lines.append(lines[end_idx])
-                    brace_count += lines[end_idx].count("{") - lines[end_idx].count("}")
-                    end_idx += 1
-                if end_idx < len(lines):
-                    block_lines.append(lines[end_idx])
+                block_lines.append(lines[end_idx])
+                if "#>" in lines[end_idx]:
+                    break
 
-            elif block_type == "comment":
+            return block_lines, end_idx
+
+        def extract_param_block(start_idx: int) -> Tuple[List[str], int]:
+            """Extract a param block, handling nested braces."""
+            block_lines = [lines[start_idx]]
+            end_idx = start_idx
+            brace_count = lines[start_idx].count("{") - lines[start_idx].count("}")
+
+            while end_idx + 1 < len(lines) and (
+                brace_count > 0 or ")" not in lines[end_idx]
+            ):
                 end_idx += 1
-                while (
-                    end_idx < len(lines)
-                    and self.comment_syntax["end"] not in lines[end_idx]
-                ):
-                    block_lines.append(lines[end_idx])
-                    end_idx += 1
-                if end_idx < len(lines):
-                    block_lines.append(lines[end_idx])
+                block_lines.append(lines[end_idx])
+                brace_count += lines[end_idx].count("{") - lines[end_idx].count("}")
+                if brace_count == 0 and ")" in lines[end_idx]:
+                    break
 
             return block_lines, end_idx
 
@@ -80,27 +79,41 @@ class PowerShellHandler(FileHandler):
 
             # Handle param blocks
             elif stripped.lower().startswith("param"):
-                block_lines, end_idx = extract_block(i, "param")
+                block_lines, end_idx = extract_param_block(i)
                 sections.append(FileSection("\n".join(block_lines), is_special=True))
                 processed_indices.update(range(i, end_idx + 1))
                 i = end_idx
 
-            # Handle copyright blocks
-            elif stripped.startswith(self.comment_syntax["start"]):
-                block_lines, end_idx = extract_block(i, "comment")
-                block_text = "\n".join(block_lines)
-                sections.append(
-                    FileSection(
-                        block_text,
-                        is_comment_block=True,
-                        is_copyright=self.is_copyright_text(block_text),
+            # Handle help and copyright blocks
+            elif stripped.startswith("<#"):
+                if ".SYNOPSIS" in stripped or ".DESCRIPTION" in stripped:
+                    block_lines, end_idx = extract_help_block(i)
+                    sections.append(
+                        FileSection("\n".join(block_lines), is_special=True)
                     )
-                )
+                else:
+                    block_lines, end_idx = extract_help_block(i)
+                    block_text = "\n".join(block_lines)
+                    sections.append(
+                        FileSection(
+                            block_text,
+                            is_comment_block=True,
+                            is_copyright=self.is_copyright_text(block_text),
+                        )
+                    )
                 processed_indices.update(range(i, end_idx + 1))
                 i = end_idx
 
+            # Handle CmdletBinding attribute
+            elif stripped.startswith("[CmdletBinding"):
+                sections.append(FileSection(line, is_special=True))
+                processed_indices.add(i)
+
             # Handle remaining content
             elif stripped and i not in processed_indices:
+                sections.append(FileSection(line))
+                processed_indices.add(i)
+            elif not stripped and i not in processed_indices:
                 sections.append(FileSection(line))
                 processed_indices.add(i)
 
@@ -115,8 +128,9 @@ class PowerShellHandler(FileHandler):
         # Extract different types of sections
         requires_sections = []
         using_sections = []
+        help_sections = []
         param_sections = []
-        content_sections = []
+        main_sections = []
 
         for section in sections:
             if section.is_copyright:
@@ -127,41 +141,41 @@ class PowerShellHandler(FileHandler):
                     requires_sections.append(section.content)
                 elif content.startswith("using"):
                     using_sections.append(section.content)
+                elif content.startswith("<#") and (
+                    ".SYNOPSIS" in content or ".DESCRIPTION" in content
+                ):
+                    help_sections.append(section.content)
                 elif content.lower().startswith("param"):
                     param_sections.append(section.content)
             elif not section.is_comment_block:
-                content_sections.append(section.content)
+                main_sections.append(section.content)
 
-        # Add sections in the correct order
-        # First: requires (if present)
+        # 1. Requires statements
         if requires_sections:
             output_parts.extend(requires_sections)
+            output_parts.append("")
 
-        # Second: using statements (if present)
+        # 2. Using statements
         if using_sections:
-            if output_parts:
-                output_parts.append("")
             output_parts.extend(using_sections)
+            output_parts.append("")
 
-        # Third: param blocks (if present)
+        # 3. Help comment block
+        if help_sections:
+            output_parts.extend(help_sections)
+            output_parts.append("")
+
+        # 4. Param block
         if param_sections:
-            if output_parts:
-                output_parts.append("")
             output_parts.extend(param_sections)
-
-        # Fourth: Insert header according to rules:
-        # - After param block if it exists
-        # - After using statement if only using and requires exist
-        # - After requires statement if only requires exists
-        # - After using statement if only using exists
-        # - At the start if no special sections exist
-        if output_parts:  # If we have any special sections
             output_parts.append("")
+
+        # 5. Copyright header
         output_parts.append(new_header.rstrip())
+        output_parts.append("")
 
-        # Finally: Add remaining content
-        if content_sections:
-            output_parts.append("")
-            output_parts.extend(filter(None, content_sections))
+        # 6. Main content
+        if main_sections:
+            output_parts.extend(filter(None, main_sections))
 
         return "\n".join(output_parts) + "\n"
