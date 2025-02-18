@@ -109,122 +109,139 @@ class PowerShellHandler(FileHandler):
         ]
 
     def parse_file_content(self, content: str) -> List[FileSection]:
+        """Parse PowerShell file content into logical sections."""
         lines = content.splitlines()
         sections: List[FileSection] = []
-        current_section: List[str] = []
-        in_param_block = False
+        current_lines: List[str] = []
+        processed_indices: Set[int] = set()
+
+        def extract_block(start_idx: int, block_type: str) -> Tuple[List[str], int]:
+            """Extract a block of content starting at the given index."""
+            block_lines = [lines[start_idx]]
+            end_idx = start_idx
+
+            if block_type == "param":
+                brace_count = lines[start_idx].count("{") - lines[start_idx].count("}")
+                end_idx += 1
+                while end_idx < len(lines) and (
+                    brace_count > 0 or "}" not in lines[end_idx]
+                ):
+                    block_lines.append(lines[end_idx])
+                    brace_count += lines[end_idx].count("{") - lines[end_idx].count("}")
+                    end_idx += 1
+                if end_idx < len(lines):
+                    block_lines.append(lines[end_idx])
+
+            elif block_type == "comment":
+                end_idx += 1
+                while (
+                    end_idx < len(lines)
+                    and self.comment_syntax["end"] not in lines[end_idx]
+                ):
+                    block_lines.append(lines[end_idx])
+                    end_idx += 1
+                if end_idx < len(lines):
+                    block_lines.append(lines[end_idx])
+
+            return block_lines, end_idx
 
         i = 0
         while i < len(lines):
+            if i in processed_indices:
+                i += 1
+                continue
+
             line = lines[i].rstrip()
+            stripped = line.strip()
+
+            # Handle requires statements
+            if stripped.startswith("#requires"):
+                sections.append(FileSection(line, is_special=True))
+                processed_indices.add(i)
+
+            # Handle using statements
+            elif stripped.startswith("using"):
+                sections.append(FileSection(line, is_special=True))
+                processed_indices.add(i)
 
             # Handle param blocks
-            if line.strip().lower().startswith("param"):
-                current_section = [line]
-                i += 1
-                brace_count = line.count("{") - line.count("}")
-                while i < len(lines) and (brace_count > 0 or "}" not in lines[i]):
-                    current_section.append(lines[i])
-                    brace_count += lines[i].count("{") - lines[i].count("}")
-                    i += 1
-                if i < len(lines):
-                    current_section.append(lines[i])
-                sections.append(
-                    FileSection("\n".join(current_section), is_special=True)
-                )
-                i += 1
-                continue
-
-            # Handle special lines
-            if self.is_special_line(line):
-                if current_section:
-                    sections.append(FileSection("\n".join(current_section)))
-                    current_section = []
-                sections.append(FileSection(line, is_special=True))
-                i += 1
-                continue
+            elif stripped.lower().startswith("param"):
+                block_lines, end_idx = extract_block(i, "param")
+                sections.append(FileSection("\n".join(block_lines), is_special=True))
+                processed_indices.update(range(i, end_idx + 1))
+                i = end_idx
 
             # Handle copyright blocks
-            if line.strip().startswith(self.comment_syntax["start"]):
-                if current_section:
-                    sections.append(FileSection("\n".join(current_section)))
-                    current_section = []
-                comment_lines = [line]
-                i += 1
-                while i < len(lines) and self.comment_syntax["end"] not in lines[i]:
-                    comment_lines.append(lines[i])
-                    i += 1
-                if i < len(lines):
-                    comment_lines.append(lines[i])
-                comment_text = "\n".join(comment_lines)
+            elif stripped.startswith(self.comment_syntax["start"]):
+                block_lines, end_idx = extract_block(i, "comment")
+                block_text = "\n".join(block_lines)
                 sections.append(
                     FileSection(
-                        comment_text,
+                        block_text,
                         is_comment_block=True,
-                        is_copyright=self.is_copyright_text(comment_text),
+                        is_copyright=self.is_copyright_text(block_text),
                     )
                 )
-                i += 1
-                continue
+                processed_indices.update(range(i, end_idx + 1))
+                i = end_idx
 
-            if line.strip():
-                current_section.append(line)
+            # Handle remaining content
+            elif stripped and i not in processed_indices:
+                sections.append(FileSection(line))
+                processed_indices.add(i)
+
             i += 1
-
-        if current_section:
-            sections.append(FileSection("\n".join(current_section)))
 
         return sections
 
     def create_output(self, sections: List[FileSection], new_header: str) -> str:
-        # Order sections: requires -> using -> param -> copyright -> rest
-        new_sections: List[str] = []
+        """Create the final output with correct PowerShell section ordering."""
+        # Group sections by type
+        requires: List[str] = []
+        using: List[str] = []
+        param: List[str] = []
+        content: List[str] = []
 
-        # Add requires statements
-        requires = [
-            s.content
-            for s in sections
-            if s.is_special and s.content.strip().startswith("#requires")
-        ]
-        new_sections.extend(requires)
+        for section in sections:
+            if section.is_copyright:
+                continue
 
-        # Add using statements
-        using = [
-            s.content
-            for s in sections
-            if s.is_special and s.content.strip().startswith("using")
-        ]
+            stripped = section.content.strip()
+            if section.is_special:
+                if stripped.startswith("#requires"):
+                    requires.append(section.content)
+                elif stripped.startswith("using"):
+                    using.append(section.content)
+                elif stripped.lower().startswith(("param", "[cmdletbinding")):
+                    param.append(section.content)
+            elif not section.is_comment_block:
+                content.append(section.content)
+
+        # Build output with correct ordering and spacing
+        output_parts: List[str] = []
+
+        if requires:
+            output_parts.extend(requires)
+
         if using:
-            if new_sections:
-                new_sections.append("")
-            new_sections.extend(using)
+            if output_parts:
+                output_parts.append("")
+            output_parts.extend(using)
 
-        # Add param blocks
-        param = [
-            s.content
-            for s in sections
-            if s.is_special
-            and s.content.strip().startswith(("param", "[CmdletBinding"))
-        ]
         if param:
-            if new_sections:
-                new_sections.append("")
-            new_sections.extend(param)
+            if output_parts:
+                output_parts.append("")
+            output_parts.extend(param)
 
-        # Add copyright header
-        if new_sections:
-            new_sections.append("")
-        new_sections.append(new_header.rstrip())
+        if output_parts:
+            output_parts.append("")
+        output_parts.append(new_header.rstrip())
 
-        # Add remaining content
-        remaining = [
-            s.content for s in sections if not s.is_special and not s.is_copyright
-        ]
-        if remaining:
-            new_sections.append("")
-            new_sections.extend(remaining)
+        if content:
+            output_parts.append("")
+            output_parts.extend(content)
 
-        return "\n".join(new_sections) + "\n"
+        return "\n".join(output_parts) + "\n"
 
 
 class TerraformHandler(FileHandler):
