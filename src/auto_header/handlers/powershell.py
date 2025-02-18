@@ -1,5 +1,5 @@
 from ..core import FileHandler, FileSection
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 
 class PowerShellHandler(FileHandler):
@@ -109,66 +109,60 @@ class PowerShellHandler(FileHandler):
         return sections
 
     def create_output(self, sections: List[FileSection], new_header: str) -> str:
-        """
-        Create the final output with correct PowerShell section ordering.
-
-        Header placement rules:
-        1. After param block if it exists
-        2. After using statement if only using and requires exist
-        3. After requires statement if only requires exists
-        4. After using statement if only using exists
-        5. At the start if no special sections exist
-        """
-        # Group sections by type using list comprehensions for efficiency
-        requires = [
-            s.content
-            for s in sections
-            if s.is_special and s.content.strip().startswith("#requires")
-        ]
-        using = [
-            s.content
-            for s in sections
-            if s.is_special and s.content.strip().startswith("using")
-        ]
-        param = [
-            s.content
-            for s in sections
-            if s.is_special
-            and s.content.strip().lower().startswith(("param", "[cmdletbinding"))
-        ]
-        content = [
-            s.content
-            for s in sections
-            if not s.is_special and not s.is_copyright and not s.is_comment_block
-        ]
-
-        # Build output sections in order
+        """Create final output with correct PowerShell section ordering."""
         output_parts: List[str] = []
 
+        # Extract different types of sections
+        requires_sections = []
+        using_sections = []
+        param_sections = []
+        content_sections = []
+
+        for section in sections:
+            if section.is_copyright:
+                continue
+            elif section.is_special:
+                content = section.content.strip()
+                if content.startswith("#requires"):
+                    requires_sections.append(section.content)
+                elif content.startswith("using"):
+                    using_sections.append(section.content)
+                elif content.lower().startswith("param"):
+                    param_sections.append(section.content)
+            elif not section.is_comment_block:
+                content_sections.append(section.content)
+
+        # Build output based on rules:
+        # 1. After param block if it exists
+        # 2. After using statement if only using and requires exist
+        # 3. After requires statement if only requires exists
+        # 4. After using statement if only using exists
+        # 5. At the start if no special sections exist
+
         # Add requires if present
-        if requires:
-            output_parts.extend(requires)
+        if requires_sections:
+            output_parts.extend(requires_sections)
 
         # Add using statements if present
-        if using:
+        if using_sections:
             if output_parts:
                 output_parts.append("")
-            output_parts.extend(using)
+            output_parts.extend(using_sections)
 
         # Add param blocks if present
-        if param:
+        if param_sections:
             if output_parts:
                 output_parts.append("")
-            output_parts.extend(param)
+            output_parts.extend(param_sections)
 
-        # Add copyright header at the correct position
+        # Add header based on what sections exist
         if output_parts:
             output_parts.append("")
         output_parts.append(new_header.rstrip())
 
-        # Add remaining content after header
-        if content:
+        # Add remaining content
+        if content_sections:
             output_parts.append("")
-            output_parts.extend(filter(None, content))  # Filter out empty strings
+            output_parts.extend(content_sections)
 
         return "\n".join(output_parts) + "\n"
