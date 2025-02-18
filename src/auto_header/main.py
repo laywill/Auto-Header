@@ -241,35 +241,77 @@ class AutoHeader:
                 content = f.read()
 
             sections = self.parse_file_content(content, filepath)
+            new_header = self.format_header(file_config["comment"])
 
             # Check if copyright header already exists and matches
             existing_copyright = next((s for s in sections if s.is_copyright), None)
-            new_header = self.format_header(file_config["comment"])
-
             if (
                 existing_copyright
                 and existing_copyright.content.strip() == new_header.strip()
             ):
                 return False
 
-            # Build new content
+            # Build new content with correct ordering
             new_sections = []
-            copyright_added = False
+            _, ext = os.path.splitext(filepath)
+            ext = ext.lower()
 
-            # Add special sections first
-            special_sections = [s for s in sections if s.is_special]
-            if special_sections:
-                new_sections.extend(special_sections)
+            # Special handling for PowerShell files
+            if ext == ".ps1":
+                # First: #requires statements
+                requires_sections = [
+                    s
+                    for s in sections
+                    if s.is_special and s.content.strip().startswith("#requires")
+                ]
+                new_sections.extend(requires_sections)
 
-            # Add copyright header
-            new_sections.append(FileSection(new_header, is_copyright=True))
+                # Second: using statements
+                using_sections = [
+                    s
+                    for s in sections
+                    if not s.is_special and s.content.strip().startswith("using")
+                ]
+                new_sections.extend(using_sections)
 
-            # Add remaining non-special, non-copyright sections
-            remaining_sections = [
-                s for s in sections if not s.is_special and not s.is_copyright
-            ]
-            if remaining_sections:
+                # Third: param blocks and cmdlet bindings
+                param_sections = [
+                    s
+                    for s in sections
+                    if s.is_special
+                    and (
+                        s.content.strip().startswith("param")
+                        or s.content.strip().startswith("[CmdletBinding")
+                    )
+                ]
+                new_sections.extend(param_sections)
+
+                # Fourth: copyright header
+                new_sections.append(FileSection(new_header, is_copyright=True))
+
+                # Finally: remaining content
+                remaining_sections = [
+                    s
+                    for s in sections
+                    if s not in requires_sections
+                    and s not in using_sections
+                    and s not in param_sections
+                    and not s.is_copyright
+                ]
                 new_sections.extend(remaining_sections)
+            else:
+                # For non-PowerShell files, maintain current ordering
+                special_sections = [s for s in sections if s.is_special]
+                if special_sections:
+                    new_sections.extend(special_sections)
+
+                new_sections.append(FileSection(new_header, is_copyright=True))
+
+                remaining_sections = [
+                    s for s in sections if not s.is_special and not s.is_copyright
+                ]
+                if remaining_sections:
+                    new_sections.extend(remaining_sections)
 
             # Join sections with appropriate spacing
             output_parts = []
