@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 import re
+from .errors import ValidationError, ParseError
 
 
 @dataclass
@@ -81,3 +82,43 @@ class FileHandler(ABC):
     def create_output(self, sections: List[FileSection], new_header: str) -> str:
         """Create final output from sections and new header."""
         pass
+
+    def validate_header_content(self, header: str) -> None:
+        """Validate header content meets requirements."""
+        if len(header) > 2000:
+            raise ValidationError(
+                "Header exceeds maximum length of 2000 characters",
+                context={"length": len(header)},
+            )
+
+        if not any(
+            word in header.lower() for word in ["copyright", "license", "licence"]
+        ):
+            raise ValidationError(
+                "Header must contain copyright or license information"
+            )
+
+        # Check for code-like syntax
+        code_patterns = [
+            r"def\s+\w+\s*\(",  # Python function
+            r"function\s+\w+\s*{",  # JavaScript/PowerShell function
+            r"resource\s+\"[\w_]+\"",  # Terraform resource
+            r"^\s*import\s+",  # Import statements
+        ]
+
+        for pattern in code_patterns:
+            if re.search(pattern, header):
+                raise ValidationError(
+                    "Header contains code-like syntax", context={"pattern": pattern}
+                )
+
+    def format_header(self) -> str:
+        """Format the header text with appropriate comment markers."""
+        try:
+            self.validate_header_content(self.header_text)
+            # ... existing formatting code ...
+        except ValidationError as e:
+            e.file = getattr(
+                self, "current_file", None
+            )  # Add file context if available
+            raise
