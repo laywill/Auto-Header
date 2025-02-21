@@ -1,6 +1,11 @@
 # Created by https://www.toptal.com/developers/gitignore/api/python,windows,osx,linux,visualstudiocode,pycharm
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,windows,osx,linux,visualstudiocode,pycharm
 
+### Auto-Header ###
+# Test fixture backup files
+tests/**/*.bak
+
+
 ### GitIngest ###
 # GitIngest file for priming LLM chat prompt
 digest.txt

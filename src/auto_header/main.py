@@ -5,7 +5,7 @@ import re
 import fnmatch
 import argparse
 
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Any
 from .core import FileHandler
 from .handlers import HANDLERS
 
