@@ -1,4 +1,7 @@
+import os
+import stat
 from ..core import FileHandler, FileSection
+from ..errors import FileOperationError
 from typing import Dict, List, Set
 
 
@@ -18,8 +21,28 @@ class BashHandler(FileHandler):
         return [
             r"^#!.*$",  # shebang
             r"^#\s*-\*-.*-\*-$",  # editor settings
-            r"^set\s+[-+][\w\s]+$",  # shell options (set -e, set -x, etc.)
+            r"^set\s+[-+][\w\s]+$",  # shell options
+            r"^export\s+\w+=.*$",  # exports
+            r"^readonly\s+\w+=.*$",  # readonly variables
+            r"^IFS=.*$",  # IFS setting
         ]
+
+    def _preserve_permissions(self, filepath: str) -> None:
+        """Preserve original file permissions."""
+        try:
+            st = os.stat(filepath)
+            os.chmod(filepath, st.st_mode)
+
+            # Make file executable if it has a shebang
+            with open(filepath, "r", encoding="utf-8") as f:
+                first_line = f.readline().strip()
+                if first_line.startswith("#!"):
+                    os.chmod(filepath, st.st_mode | stat.S_IEXEC)
+
+        except Exception as e:
+            raise FileOperationError(
+                f"Failed to preserve permissions: {str(e)}", file=filepath
+            )
 
     def parse_file_content(self, content: str) -> List[FileSection]:
         """Parse Bash file content preserving special sections."""
@@ -60,7 +83,10 @@ class BashHandler(FileHandler):
                 processed_indices.add(i)
 
             # Handle shell option settings
-            elif stripped.startswith("set "):
+            elif any(
+                stripped.startswith(opt)
+                for opt in ["set ", "export ", "readonly ", "IFS="]
+            ):
                 sections.append(FileSection(line, is_special=True))
                 processed_indices.add(i)
 
@@ -89,9 +115,9 @@ class BashHandler(FileHandler):
             s.content
             for s in sections
             if s.is_special
-            and (
-                s.content.startswith("set ")
-                or (s.content.startswith("#") and "-*-" in s.content)
+            and any(
+                s.content.startswith(opt)
+                for opt in ["set ", "export ", "readonly ", "IFS=", "#"]
             )
         ]
         content = [
@@ -115,4 +141,10 @@ class BashHandler(FileHandler):
             output_parts.append("")
             output_parts.extend(filter(None, content))
 
-        return "\n".join(output_parts) + "\n"
+        result = "\n".join(output_parts) + "\n"
+
+        # Preserve file permissions if file exists
+        if hasattr(self, "current_file") and os.path.exists(self.current_file):
+            self._preserve_permissions(self.current_file)
+
+        return result
