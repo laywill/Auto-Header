@@ -111,14 +111,3 @@ class FileHandler(ABC):
                 raise ValidationError(
                     "Header contains code-like syntax", context={"pattern": pattern}
                 )
-
-    def format_header(self) -> str:
-        """Format the header text with appropriate comment markers."""
-        try:
-            self.validate_header_content(self.header_text)
-            # ... existing formatting code ...
-        except ValidationError as e:
-            e.file = getattr(
-                self, "current_file", None
-            )  # Add file context if available
-            raise

@@ -107,41 +107,38 @@ class BashHandler(FileHandler):
         """Create final output with correct Bash script structure."""
         output_parts: List[str] = []
 
-        # Group sections by type
-        shebangs = [
-            s.content for s in sections if s.is_special and s.content.startswith("#!")
-        ]
-        settings = [
+        # Handle shebang (should only be one)
+        shebang = next(
+            (
+                s.content
+                for s in sections
+                if s.is_special and s.content.startswith("#!")
+            ),
+            None,
+        )
+        if shebang:
+            output_parts.append(shebang)
+            output_parts.append("")  # Blank line after shebang
+
+        # Add formatted header with comment syntax
+        formatted_header = self.format_header()
+        output_parts.append(formatted_header.rstrip())
+        output_parts.append("")  # Blank line after header
+
+        # Add remaining content
+        remaining = [
             s.content
             for s in sections
-            if s.is_special
-            and any(
-                s.content.startswith(opt)
-                for opt in ["set ", "export ", "readonly ", "IFS=", "#"]
-            )
-        ]
-        content = [
-            s.content
-            for s in sections
-            if not s.is_special and not s.is_copyright and not s.is_comment_block
+            if (not s.is_special or not s.content.startswith("#!"))  # Skip shebang
+            and not s.is_copyright  # Skip old copyright
+            and s.content.strip()  # Skip empty lines
         ]
 
-        # Add sections in correct order
-        if shebangs:
-            output_parts.extend(shebangs)
-            output_parts.append("")
+        if remaining:
+            output_parts.extend(remaining)
 
-        output_parts.append(new_header.rstrip())
-
-        if settings:
-            output_parts.append("")
-            output_parts.extend(settings)
-
-        if content:
-            output_parts.append("")
-            output_parts.extend(filter(None, content))
-
-        result = "\n".join(output_parts) + "\n"
+        # Ensure single newline at end of file
+        result = "\n".join(output_parts).rstrip() + "\n"
 
         # Preserve file permissions if file exists
         if hasattr(self, "current_file") and os.path.exists(self.current_file):
