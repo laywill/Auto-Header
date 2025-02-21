@@ -1,0 +1,9 @@
+---
+title: Example Document
+author: Test Author
+---
+content:
+  key: value
+  list:
+    - item1
+    - item2
