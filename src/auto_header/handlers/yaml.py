@@ -1,5 +1,6 @@
 from ..core import FileHandler, FileSection
-from typing import Dict, List, Set
+from ..errors import ParseError
+from typing import Dict, List, Set, Tuple
 
 
 class YAMLHandler(FileHandler):
@@ -16,9 +17,9 @@ class YAMLHandler(FileHandler):
     @property
     def special_patterns(self) -> List[str]:
         return [
-            r"^---\s*$",  # YAML document marker
-            r"^%YAML.*$",  # YAML version
-            r"^%TAG.*$",  # YAML tag directives
+            r"^---\s*$",  # document marker
+            r"^%YAML\s+[\d\.]+\s*$",  # YAML version
+            r"^%TAG\s+.*$",
         ]
 
     def parse_file_content(self, content: str) -> List[FileSection]:
